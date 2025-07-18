@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Meter Dashboard</title>
+
+  <!-- Firebase & Tailwind -->
+  <script src="https://www.gstatic.com/firebasejs/9.12.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.12.1/firebase-firestore.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.12.1/firebase-auth.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-gray-100 font-sans min-h-screen flex flex-col">
+
+  <!-- ð Login / Register -->
+  <div id="loginScreen" class="flex justify-center items-center min-h-screen">
+    <div class="bg-white p-6 rounded-xl shadow max-w-md w-full">
+      <h2 class="text-xl font-semibold mb-4 text-center">ð Login or Register</h2>
+      <input type="email" id="email" placeholder="Email" class="w-full mb-3 p-2 border rounded"/>
+      <input type="password" id="password" placeholder="Password" class="w-full mb-4 p-2 border rounded"/>
+      <div class="flex justify-between">
+        <button id="loginBtn"     class="bg-blue-600  text-white px-4 py-2 rounded">Login</button>
+        <button id="registerBtn"  class="bg-green-600 text-white px-4 py-2 rounded">Register</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- â¡ Main App -->
+  <div id="app" class="hidden p-4 flex-grow">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-4">
+      <h1 class="text-xl md:text-2xl font-bold">â¡ Meter</h1>
+      <button id="logoutBtn" class="text-red-600">Logout</button>
+    </div>
+
+    <!-- Mini cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 text-sm md:text-base">
+      <div class="bg-white p-3 rounded-xl shadow">Today:  <span id="todayUnits">0</span></div>
+      <div class="bg-white p-3 rounded-xl shadow">Avg:    <span id="avgUnits">0</span></div>
+      <div class="bg-white p-3 rounded-xl shadow">Cycle:  <span id="cycleUnits">0</span></div>
+    </div>
+
+    <!-- Readings list -->
+    <div class="bg-white p-3 rounded-xl shadow text-sm">
+      <h2 class="text-base font-semibold mb-1">ð Readings</h2>
+      <div class="grid grid-cols-4 font-semibold border-b pb-1 sticky top-0 bg-white z-10">
+        <div>Date</div><div>kWh</div><div>Unit</div><div></div>
+      </div>
+      <div class="max-h-60 overflow-y-auto mt-2">
+        <ul id="readingList" class="space-y-1"></ul>
+      </div>
+    </div>
+
+    <!-- Monthly totals -->
+    <h2 class="text-base font-semibold mt-6 mb-2">ð Monthly Totals</h2>
+    <div id="monthlyCards" class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm md:text-base"></div>
+  </div>
+
+  <!-- â Floating add -->
+  <button id="addBtn"
+          class="hidden fixed bottom-5 right-5 w-14 h-14 bg-blue-600 text-white text-2xl rounded-full shadow-lg hover:bg-blue-700">
+    +
+  </button>
+
+  <!-- â Modal -->
+  <div id="modal" class="fixed inset-0 bg-black bg-opacity-40 hidden items-center justify-center z-50">
+    <div class="bg-white p-5 rounded-xl w-11/12 max-w-sm">
+      <h2 class="text-lg font-semibold mb-2">Add Reading</h2>
+      <input id="readingInput" type="number" placeholder="kWh"  class="w-full p-2 border rounded mb-2"/>
+      <input id="dateInput"    type="date"   class="w-full p-2 border rounded mb-4"/>
+      <div class="flex justify-end">
+        <button id="saveBtn"   class="bg-green-600 text-white px-3 py-1 rounded">Save</button>
+        <button id="cancelBtn" class="ml-2 text-gray-600">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================  Core Script  ====================== -->
+  <script type="module">
+    /* -----------------------------------------------------------
+       ð§ Firebase config (Ø§Ù¾ÙØ§ Ù¾Ø±Ø§Ø¬ÛÚ©Ù¹ ÙÚ¯Ø§Ø¦ÛÚº)
+    ----------------------------------------------------------- */
+    import { initializeApp }            from "https://www.gstatic.com/firebasejs/9.12.1/firebase-app.js";
+    import { getFirestore, collection, addDoc, deleteDoc,
+             doc, query, orderBy, onSnapshot, Timestamp }
+           from "https://www.gstatic.com/firebasejs/9.12.1/firebase-firestore.js";
+    import { getAuth, signInWithEmailAndPassword,
+             createUserWithEmailAndPassword, onAuthStateChanged, signOut }
+           from "https://www.gstatic.com/firebasejs/9.12.1/firebase-auth.js";
+
+    const firebaseConfig = {
+      apiKey:            "AIzaSyAMt9BY8LGp19ZvKz2AYc5mGdkesLZG8fo",
+      authDomain:        "meter-app-35165.firebaseapp.com",
+      projectId:         "meter-app-35165",
+      storageBucket:     "meter-app-35165.appspot.com",
+      messagingSenderId: "944338711956",
+      appId:             "1:944338711956:web:602cbd6c992808af8f8b81"
+    };
+
+    const app     = initializeApp(firebaseConfig);
+    const auth    = getAuth(app);
+    const db      = getFirestore(app);
+
+    /* -----------------------------------------------------------
+       ð Login / Register / Logout
+    ----------------------------------------------------------- */
+    const loginScreen = document.getElementById("loginScreen");
+    const appScreen   = document.getElementById("app");
+    const addBtn      = document.getElementById("addBtn");
+    const logoutBtn   = document.getElementById("logoutBtn");
+
+    document.getElementById("loginBtn").onclick = () => {
+      const email    = document.getElementById("email").value;
+      const password = document.getElementById("password").value;
+      signInWithEmailAndPassword(auth, email, password).catch(e => alert(e.message));
+    };
+    document.getElementById("registerBtn").onclick = () => {
+      const email    = document.getElementById("email").value;
+      const password = document.getElementById("password").value;
+      createUserWithEmailAndPassword(auth, email, password).catch(e => alert(e.message));
+    };
+    logoutBtn.onclick = () => signOut(auth);
+
+    /* -----------------------------------------------------------
+       ð UI Elements
+    ----------------------------------------------------------- */
+    const readingList   = document.getElementById("readingList");
+    const todayUnits    = document.getElementById("todayUnits");
+    const cycleUnits    = document.getElementById("cycleUnits");
+    const avgUnits      = document.getElementById("avgUnits");
+    const monthlyCards  = document.getElementById("monthlyCards");
+    const modal         = document.getElementById("modal");
+    const readingInput  = document.getElementById("readingInput");
+    const dateInput     = document.getElementById("dateInput");
+
+    /* -----------------------------------------------------------
+       â Add Reading Modal
+    ----------------------------------------------------------- */
+    document.getElementById("addBtn").onclick = () => {
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+      dateInput.valueAsDate = new Date();
+    };
+    document.getElementById("cancelBtn").onclick = () => modal.classList.add("hidden");
+    document.getElementById("saveBtn").onclick = async () => {
+      const reading = parseFloat(readingInput.value);
+      const date    = new Date(dateInput.value);
+      if (isNaN(reading) || !date) return;
+      const userId  = auth.currentUser?.uid;
+      if (!userId)  return alert("Login failed. Try again.");
+
+      await addDoc(collection(db, `users/${userId}/readings`), {
+        reading,
+        date: Timestamp.fromDate(date)
+      });
+      modal.classList.add("hidden");
+      readingInput.value = "";
+    };
+
+    /* -----------------------------------------------------------
+       ð§® Helpers
+    ----------------------------------------------------------- */
+    const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+
+    // ð Fill missing days with interpolated readings
+    async function fillMissingReadings(rows, userId) {
+      for (let i = 1; i < rows.length; i++) {
+        const prev = rows[i-1];
+        const curr = rows[i];
+        const daysDiff = Math.floor((curr.dateObj - prev.dateObj) / (1000 * 60 * 60 * 24));
+
+        if (daysDiff > 1) {
+          const dailyStep = (curr.reading - prev.reading) / daysDiff;
+
+          for (let d = 1; d < daysDiff; d++) {
+            const newDate = new Date(prev.dateObj);
+            newDate.setDate(newDate.getDate() + d);
+
+            // Skip if reading for that date already exists
+            const exists = rows.find(r => r.dateObj.toDateString() === newDate.toDateString());
+            if (exists) continue;
+
+            const newReading = +(prev.reading + dailyStep * d).toFixed(2);
+
+            await addDoc(collection(db, `users/${userId}/readings`), {
+              reading: newReading,
+              date:    Timestamp.fromDate(newDate),
+              auto:    true   // flag to identify autoâgenerated
+            });
+          }
+        }
+      }
+    }
+
+    /* -----------------------------------------------------------
+       ð Realtime Data & UI Render
+    ----------------------------------------------------------- */
+    let hasFilled = false; // prevent infinite loop
+
+    onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        // Show login
+        loginScreen.classList.remove("hidden");
+        appScreen.classList.add("hidden");
+        addBtn.classList.add("hidden");
+        return;
+      }
+
+      // Show app
+      loginScreen.classList.add("hidden");
+      appScreen.classList.remove("hidden");
+      addBtn.classList.remove("hidden");
+
+      const userId = user.uid;
+
+      onSnapshot(
+        query(collection(db, `users/${userId}/readings`), orderBy("date")),
+        async (snap) => {
+          const rows = [];
+          snap.forEach(s => rows.push({ id: s.id, ...s.data(), dateObj: s.data().date.toDate() }));
+          rows.sort((a,b)=>a.dateObj - b.dateObj);
+
+          // 1ï¸â£ Fill missing dates only first time after login
+          if (!hasFilled) {
+            hasFilled = true;
+            await fillMissingReadings(rows, userId);
+            return; // snapshot will reâfire automatically
+          }
+
+          /* ---------- UI Render ---------- */
+          readingList.innerHTML  = "";
+          monthlyCards.innerHTML = "";
+
+          // Monthly totals
+          const monthlyTotals = {};
+          for (let i = 1; i < rows.length; i++) {
+            const diff = rows[i].reading - rows[i-1].reading;
+            if (diff <= 0) continue;
+            const key = monthKey(rows[i].dateObj);
+            monthlyTotals[key] = (monthlyTotals[key] || 0) + diff;
+          }
+          Object.keys(monthlyTotals).sort().reverse().forEach(key => {
+            const [y, m] = key.split("-");
+            const card = document.createElement("div");
+            card.className = "bg-white p-3 rounded-xl shadow flex justify-between";
+            card.innerHTML = `<span>${new Date(y, m-1).toLocaleString("default",{month:"long",year:"numeric"})}</span>
+                              <span class="font-semibold">${monthlyTotals[key].toFixed(2)} Units</span>`;
+            monthlyCards.appendChild(card);
+          });
+
+          // Show last readings from cycle (13thâ12th)
+          const now       = new Date();
+          const showFrom  = new Date(now.getFullYear(), now.getMonth(), 13);
+          if (now.getDate() < 13) showFrom.setMonth(showFrom.getMonth() - 1);
+
+          rows.forEach((r, idx) => {
+            const unit = idx > 0 ? (r.reading - rows[idx-1].reading).toFixed(2) : "-";
+            if (r.dateObj >= showFrom) {
+              const li = document.createElement("li");
+              li.className = "grid grid-cols-4 gap-2 items-center bg-gray-100 p-1 rounded";
+              li.innerHTML =
+                `<span>${r.dateObj.toDateString().slice(4,10)}</span>
+                 <span>${r.reading}</span>
+                 <span>${unit}</span>
+                 <button onclick="window.del('${r.id}')" class="text-red-600 text-lg">ð</button>`;
+              readingList.appendChild(li);
+            }
+          });
+
+          // Today units
+          if (rows.length >= 2) {
+            todayUnits.textContent = (rows.at(-1).reading - rows.at(-2).reading).toFixed(2);
+          }
+
+          // Average units per day
+          let total = 0, days = 0;
+          for (let i = 1; i < rows.length; i++) {
+            const diff  = rows[i].reading - rows[i-1].reading;
+            const dDiff = (rows[i].dateObj - rows[i-1].dateObj) / (1000*60*60*24);
+            if (diff > 0 && dDiff > 0) { total += diff; days += dDiff; }
+          }
+          avgUnits.textContent = days ? (total / days).toFixed(2) : "0";
+
+          // Current billing cycle units (13thâ12th)
+          const cyStart = showFrom;
+          const cyEnd   = new Date(cyStart.getFullYear(), cyStart.getMonth()+1, 12, 23, 59, 59);
+          const cyRows  = rows.filter(r => r.dateObj >= cyStart && r.dateObj <= cyEnd);
+          cycleUnits.textContent = cyRows.length >= 2
+                                   ? (cyRows.at(-1).reading - cyRows[0].reading).toFixed(2)
+                                   : "0";
+        }
+      );
+    });
+
+    /* -----------------------------------------------------------
+       ð Delete reading
+    ----------------------------------------------------------- */
+    window.del = async (id) => {
+      const userId = auth.currentUser?.uid;
+      if (!userId) return;
+      if (confirm("Delete this reading?")) {
+        await deleteDoc(doc(db, `users/${userId}/readings`, id));
+      }
+    };
+  </script>
+</body>
+</html>
